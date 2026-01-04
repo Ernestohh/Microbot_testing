@@ -24,6 +24,7 @@
  */
 package net.runelite.client.plugins.microbot.externalplugins;
 
+import com.fasterxml.jackson.databind.annotation.NoClass;
 import com.google.common.annotations.VisibleForTesting;
 import com.google.common.base.Strings;
 import com.google.common.graph.Graph;
@@ -46,6 +47,7 @@ import net.runelite.client.eventbus.Subscribe;
 import net.runelite.client.events.ClientShutdown;
 import net.runelite.client.events.ExternalPluginsChanged;
 import net.runelite.client.plugins.*;
+import net.runelite.client.plugins.microbot.MicrobotApi;
 import net.runelite.client.plugins.microbot.Microbot;
 import net.runelite.client.plugins.microbot.util.misc.Rs2UiHelper;
 import net.runelite.client.ui.SplashScreen;
@@ -93,6 +95,7 @@ public class MicrobotPluginManager {
     private final PluginManager pluginManager;
     private final Gson gson;
     private final ConfigManager configManager;
+    private final MicrobotApi microbotApi;
 
     private final Map<String, URLClassLoader> loaders = new ConcurrentHashMap<>();
 
@@ -114,7 +117,8 @@ public class MicrobotPluginManager {
             ScheduledExecutorService executor,
             PluginManager pluginManager,
             Gson gson,
-            ConfigManager configManager
+            ConfigManager configManager,
+            MicrobotApi microbotApi
     ) {
         this.okHttpClient = okHttpClient;
         this.microbotPluginClient = microbotPluginClient;
@@ -123,6 +127,7 @@ public class MicrobotPluginManager {
         this.pluginManager = pluginManager;
         this.gson = gson;
         this.configManager = configManager;
+        this.microbotApi = microbotApi;
 
         PLUGIN_DIR.mkdirs();
     }
@@ -142,14 +147,26 @@ public class MicrobotPluginManager {
         try {
             List<MicrobotPluginManifest> manifests = microbotPluginClient.downloadManifest();
             Map<String, MicrobotPluginManifest> next = new HashMap<>(manifests.size());
+
+            com.google.gson.JsonArray allReleases = null;
+            try {
+                allReleases = microbotPluginClient.fetchAllReleases();
+                log.debug("Fetched {} releases from GitHub", allReleases.size());
+            } catch (IOException ex) {
+                log.warn("Failed to fetch GitHub releases: {}", ex.getMessage());
+                log.debug("Releases fetch error", ex);
+            }
+
             for (MicrobotPluginManifest m : manifests) {
                 next.put(m.getInternalName(), m);
-                try {
-                    List<String> versions = microbotPluginClient.fetchAvailableVersions(m.getInternalName());
-                    m.setAvailableVersions(versions);
-                } catch (IOException ex) {
-                    log.warn("Failed to fetch available versions for {}: {}", m.getInternalName(), ex.getMessage());
-                    log.debug("Version fetch error", ex);
+                if (allReleases != null) {
+                    try {
+                        List<String> versions = microbotPluginClient.parseVersionsFromReleases(m, allReleases);
+                        m.setAvailableVersions(versions);
+                    } catch (IOException ex) {
+                        log.warn("Failed to parse available versions for {}: {}", m.getInternalName(), ex.getMessage());
+                        log.debug("Version parse error", ex);
+                    }
                 }
             }
             boolean changed = !next.keySet().equals(manifestMap.keySet())
@@ -357,7 +374,11 @@ public class MicrobotPluginManager {
             if (loadedInternalNames.contains(internalName)) {
                 continue;
             }
-            loadSideLoadPlugin(internalName);
+            try {
+                loadSideLoadPlugin(internalName);
+            } catch (Exception exception) {
+                System.out.println("Error loading side-loaded plugin: " + internalName);
+            }
         }
         eventBus.post(new ExternalPluginsChanged());
     }
@@ -523,9 +544,23 @@ public class MicrobotPluginManager {
                 binder.install(plugin);
             };
             Injector pluginInjector = parent.createChildInjector(pluginModule);
+            System.out.println(pluginInjector.getClass().getSimpleName());
             plugin.setInjector(pluginInjector);
-        } catch (CreationException ex) {
-            log.error(ex.getMessage());
+        } catch (com.google.common.util.concurrent.ExecutionError e) {
+            // Guice/Guava wraps NoClassDefFoundError here
+            Throwable cause = e.getCause();
+            if (cause instanceof NoClassDefFoundError) {
+                log.error("Missing class while loading plugin {}: {}", clazz.getSimpleName(), cause.toString());
+            } else {
+                log.error("Error while loading plugin {}: {}", clazz.getSimpleName(), e.toString(), e);
+            }
+
+            File jar = getPluginJarFile(plugin.getClass().getSimpleName());
+            if (jar != null) {
+                jar.delete();
+            }
+        } catch (Exception ex) {
+            log.error("Incompatible plugin found: " + clazz.getSimpleName());
             File jar = getPluginJarFile(plugin.getClass().getSimpleName());
             jar.delete();
         }
@@ -562,9 +597,7 @@ public class MicrobotPluginManager {
                     || pkg.contains(".ui")
                     || pkg.contains(".util")
                     || pkg.contains(".shortestpath")
-                    || pkg.contains(".rs2cachedebugger")
                     || pkg.contains(".questhelper")
-                    || pkg.contains("pluginscheduler")
                     || pkg.contains("inventorysetups")
                     || pkg.contains("breakhandler");
         }
@@ -917,6 +950,8 @@ public class MicrobotPluginManager {
                     .url(jarUrl)
                     .build();
 
+            log.info("from url : " + jarUrl);
+
             try (Response response = clientWithoutProxy.newCall(request).execute()) {
                 if (!response.isSuccessful()) {
                     log.error("Failed to download plugin {}: HTTP {}", internalName, response.code());
@@ -996,6 +1031,7 @@ public class MicrobotPluginManager {
         if (result) {
             //verifiy hash inside loadSidePlugin doesn't work
             loadSideLoadPlugin(internalName);
+            sendPluginInstallTelemetry(manifest, versionOverride);
         }
 
         log.info("Added plugin {} to installed list", manifest.getDisplayName());
@@ -1061,8 +1097,18 @@ public class MicrobotPluginManager {
         }
         clearInstalledPluginVersion(internalName);
 
-        log.info("Added plugin {} to installed list", manifest.getDisplayName());
+        log.info("Removed plugin {} from installed list", manifest.getDisplayName());
         eventBus.post(new ExternalPluginsChanged());
+    }
+
+    private void sendPluginInstallTelemetry(MicrobotPluginManifest manifest, @Nullable String versionOverride)
+    {
+        if (manifest == null) {
+            return;
+        }
+
+        String version = Strings.isNullOrEmpty(versionOverride) ? manifest.getVersion() : versionOverride;
+        microbotApi.increasePluginInstall(manifest.getInternalName(), manifest.getDisplayName(), version);
     }
 
     /**

@@ -13,7 +13,6 @@ import net.runelite.client.plugins.microbot.Microbot;
 import net.runelite.client.plugins.microbot.globval.enums.InterfaceTab;
 import net.runelite.client.plugins.microbot.shortestpath.*;
 import net.runelite.client.plugins.microbot.util.bank.Rs2Bank;
-import net.runelite.client.plugins.microbot.util.cache.Rs2SpiritTreeCache;
 import net.runelite.client.plugins.microbot.util.equipment.Rs2Equipment;
 import net.runelite.client.plugins.microbot.util.inventory.Rs2Inventory;
 import net.runelite.client.plugins.microbot.util.magic.Rs2Magic;
@@ -23,7 +22,6 @@ import net.runelite.client.plugins.microbot.util.player.Rs2Player;
 import net.runelite.client.plugins.microbot.util.poh.PohTeleports;
 import net.runelite.client.plugins.microbot.util.tabs.Rs2Tab;
 import net.runelite.client.plugins.microbot.util.walker.Rs2Walker;
-import net.runelite.client.plugins.microbot.util.cache.Rs2SkillCache;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
@@ -45,12 +43,17 @@ public class PathfinderConfig {
     private static final WorldArea FEROX_ENCLAVE_1 = new WorldArea(3123, 3622, 2, 10, 0);
     private static final WorldArea FEROX_ENCLAVE_2 = new WorldArea(3125, 3617, 16, 23, 0);
     private static final WorldArea FEROX_ENCLAVE_3 = new WorldArea(3138, 3636, 18, 10, 0);
-    private static final WorldArea FEROX_ENCLAVE_4 = new WorldArea(3141, 3625, 14, 11, 0);
-    private static final WorldArea FEROX_ENCLAVE_5 = new WorldArea(3141, 3619, 7, 6, 0);
-    private static final WorldArea NOT_WILDERNESS_1 = new WorldArea(2997, 3525, 34, 9, 0);
-    private static final WorldArea NOT_WILDERNESS_2 = new WorldArea(3005, 3534, 21, 10, 0);
-    private static final WorldArea NOT_WILDERNESS_3 = new WorldArea(3000, 3534, 5, 5, 0);
-    private static final WorldArea NOT_WILDERNESS_4 = new WorldArea(3031, 3525, 2, 2, 0);
+	private static final WorldArea FEROX_ENCLAVE_4 = new WorldArea(3141, 3625, 14, 11, 0);
+	private static final WorldArea FEROX_ENCLAVE_5 = new WorldArea(3141, 3619, 7, 6, 0);
+	private static final WorldArea NOT_WILDERNESS_1 = new WorldArea(2997, 3525, 34, 9, 0);
+	private static final WorldArea NOT_WILDERNESS_2 = new WorldArea(3005, 3534, 21, 10, 0);
+	private static final WorldArea NOT_WILDERNESS_3 = new WorldArea(3000, 3534, 5, 5, 0);
+	private static final WorldArea NOT_WILDERNESS_4 = new WorldArea(3031, 3525, 2, 2, 0);
+	private static final WorldPoint SPIRIT_TREE_ETCETERIA = new WorldPoint(2613, 3855, 0);
+	private static final WorldPoint SPIRIT_TREE_BRIMHAVEN = new WorldPoint(2800, 3203, 0);
+	private static final WorldPoint SPIRIT_TREE_PORT_SARIM = new WorldPoint(3058, 3257, 0);
+	private static final WorldPoint SPIRIT_TREE_HOSIDIUS = new WorldPoint(1693, 3540, 0);
+	private static final WorldPoint SPIRIT_TREE_FARMING_GUILD = new WorldPoint(1251, 3750, 0);
 
     private final SplitFlagMap mapData;
     private final ThreadLocal<CollisionMap> map;
@@ -99,7 +102,12 @@ public class PathfinderConfig {
             useTeleportationPortals,
             useTeleportationSpells,
             useMagicCarpets,
-            useWildernessObelisks;
+            useWildernessObelisks,
+            useSpiritTreeEtceteria,
+            useSpiritTreeBrimhaven,
+            useSpiritTreePortSarim,
+            useSpiritTreeHosidius,
+            useSpiritTreeFarmingGuild;
     //START microbot variables
     @Getter
     private volatile int distanceBeforeUsingTeleport;
@@ -162,6 +170,11 @@ public class PathfinderConfig {
         usePoh = ShortestPathPlugin.override("usePoh", config.usePoh());
         useQuetzals = ShortestPathPlugin.override("useQuetzals", config.useQuetzals());
         useSpiritTrees = ShortestPathPlugin.override("useSpiritTrees", config.useSpiritTrees());
+        useSpiritTreeEtceteria = ShortestPathPlugin.override("spiritTreeEtceteria", config.spiritTreeEtceteria());
+        useSpiritTreeBrimhaven = ShortestPathPlugin.override("spiritTreeBrimhaven", config.spiritTreeBrimhaven());
+        useSpiritTreePortSarim = ShortestPathPlugin.override("spiritTreePortSarim", config.spiritTreePortSarim());
+        useSpiritTreeHosidius = ShortestPathPlugin.override("spiritTreeHosidius", config.spiritTreeHosidius());
+        useSpiritTreeFarmingGuild = ShortestPathPlugin.override("spiritTreeFarmingGuild", config.spiritTreeFarmingGuild());
         useTeleportationItems = ShortestPathPlugin.override("useTeleportationItems", config.useTeleportationItems());
         useTeleportationMinigames = ShortestPathPlugin.override("useTeleportationMinigames", config.useTeleportationMinigames());
         useTeleportationLevers = ShortestPathPlugin.override("useTeleportationLevers", config.useTeleportationLevers());
@@ -260,9 +273,6 @@ public class PathfinderConfig {
         usableTeleports.clear();
 
         // Check spirit tree farming states for farmable spirit trees
-        Rs2SpiritTreeCache.getInstance().update();
-        //Rs2SpiritTreeCache.logAllTreeStates();
-
         for (Map.Entry<WorldPoint, Set<Transport>> entry : createMergedList().entrySet()) {
             WorldPoint point = entry.getKey();
             Set<Transport> usableTransports = new HashSet<>(entry.getValue().size());
@@ -467,6 +477,10 @@ public class PathfinderConfig {
             log.debug("Transport ( O: {} D: {} ) requires members world", transport.getOrigin(), transport.getDestination());
             return false;
         }
+        if (transport.getType() == TransportType.SPIRIT_TREE && !isSpiritTreeDestinationEnabled(transport)) {
+            log.debug("Transport ( O: {} D: {} ) is a spirit tree route but the destination is disabled", transport.getOrigin(), transport.getDestination());
+            return false;
+        }
         // If you don't meet level requirements
         if (!hasRequiredLevels(transport)) {
             log.debug("Transport ( O: {} D: {} ) requires skill levels {}", transport.getOrigin(), transport.getDestination(), Arrays.toString(transport.getSkillLevels()));
@@ -477,8 +491,6 @@ public class PathfinderConfig {
             log.debug("Transport ( O: {} D: {} ) requires quests {}", transport.getOrigin(), transport.getDestination(), transport.getQuests());
             return false;
         }
-        // Check Spirit Tree specific requirements (farming state for farmable trees)
-        if (transport.getType() == TransportType.SPIRIT_TREE) return isSpiritTreeUsable(transport);
 
         // If the transport has varbit requirements & the varbits do not match
         if (!varbitChecks(transport)) {
@@ -543,13 +555,7 @@ public class PathfinderConfig {
         Skill[] skills = Skill.values();
         return IntStream.range(0, requiredLevels.length)
             .filter(i -> requiredLevels[i] > 0)
-            .allMatch(i -> {
-                if (Microbot.isRs2CacheEnabled()) {
-                    return Rs2SkillCache.getBoostedSkillLevel(skills[i]) >= requiredLevels[i];
-                } else {
-                    return Microbot.getClient().getBoostedSkillLevel(skills[i]) >= requiredLevels[i];
-                }
-            });
+            .allMatch(i -> Microbot.getClient().getBoostedSkillLevel(skills[i]) >= requiredLevels[i]);
     }
 
     /**
@@ -560,13 +566,7 @@ public class PathfinderConfig {
         Skill[] skills = Skill.values();
         return IntStream.range(0, requiredLevels.length)
             .filter(i -> requiredLevels[i] > 0)
-            .allMatch(i -> {
-                if (Microbot.isRs2CacheEnabled()) {
-                    return Rs2SkillCache.getBoostedSkillLevel(skills[i]) >= requiredLevels[i];
-                } else {
-                    return Microbot.getClient().getBoostedSkillLevel(skills[i]) >= requiredLevels[i];
-                }
-            });
+            .allMatch(i -> Microbot.getClient().getBoostedSkillLevel(skills[i]) >= requiredLevels[i]);
     }
 
     private void updateActionBasedOnQuestState(Transport transport) {
@@ -577,6 +577,29 @@ public class PathfinderConfig {
                 transport.setAction("Talk-to");
             }
         }
+    }
+
+    private boolean isSpiritTreeDestinationEnabled(Transport transport) {
+        WorldPoint destination = transport.getDestination();
+        if (destination == null) {
+            return true;
+        }
+        if (destination.equals(SPIRIT_TREE_ETCETERIA)) {
+            return useSpiritTreeEtceteria;
+        }
+        if (destination.equals(SPIRIT_TREE_BRIMHAVEN)) {
+            return useSpiritTreeBrimhaven;
+        }
+        if (destination.equals(SPIRIT_TREE_PORT_SARIM)) {
+            return useSpiritTreePortSarim;
+        }
+        if (destination.equals(SPIRIT_TREE_HOSIDIUS)) {
+            return useSpiritTreeHosidius;
+        }
+        if (destination.equals(SPIRIT_TREE_FARMING_GUILD)) {
+            return useSpiritTreeFarmingGuild;
+        }
+        return true;
     }
 
     private boolean isFeatureEnabled(Transport transport) {
@@ -730,19 +753,6 @@ public class PathfinderConfig {
 
         // Validate charges
         return charges != null && Integer.parseInt(charges) > 0;
-    }
-
-    /**
-     * Check if a spirit tree transport is usable
-     * This method integrates with the farming system to determine if farmable spirit trees
-     * are planted and healthy enough for transportation
-     *
-     * @param transport The spirit tree transport to check
-     * @return true if the spirit tree is available for travel
-     */
-    private boolean isSpiritTreeUsable(Transport transport) {
-        // Use the Rs2SpiritTreeCache directly for better performance and consistency
-        return Rs2SpiritTreeCache.isSpiritTreeTransportAvailable(transport);
     }
 
     @Deprecated(since = "1.6.2 - Add Restrictions to restrictions.tsv", forRemoval = true)

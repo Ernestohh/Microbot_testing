@@ -1,38 +1,33 @@
-# Repository Guidelines
+# Microbot API Guide (for Claude)
 
-## Project Structure & Module Organization
-- The root `pom.xml` controls the multi-module Maven build for `cache`, `runelite-api`, `runelite-client`, `runelite-jshell`, and `runelite-maven-plugin`.
-- Gameplay automation lives in `runelite-client/src/main/java/net/runelite/client/plugins/microbot`; keep new scripts and utilities inside this plugin.
-- Shared helpers sit under `.../microbot/util`, while runnable examples live in `.../microbot/example`.
-- Tests mirror sources in `runelite-client/src/test/java`, and project documentation and walkthroughs are kept in `docs/`.
-- CI helpers and custom Maven settings are in `ci/`, and distributable jars land in `runelite-client/target/`.
+## Scope & Paths
+- Primary plugin code: `runelite-client/src/main/java/net/runelite/client/plugins/microbot`.
+- Queryable API docs: `.../microbot/api/QUERYABLE_API.md`; quick read: `api/README.md`.
+- Keep new scripts inside the microbot plugin; share helpers under `microbot/util`.
+- Config UI for microbot plugins is rendered via `plugins/microbot/ui/MicrobotConfigPanel` (not the default RuneLite config panel); put config UI changes there.
 
-## Build, Test, and Development Commands
-- `mvn -pl runelite-client -am package` builds the client and produces `target/microbot-<version>.jar`.
-- `./ci/build.sh` recreates the CI pipeline, fetching `glslangValidator` and running `mvn verify --settings ci/settings.xml`.
-- `mvn -pl runelite-client test` runs the unit suite; add `-DskipTests` only when packaging binaries for distribution.
-- `java -jar runelite-client/target/microbot-<version>.jar` launches a locally built client for manual validation.
+## Paths & Builds
+- Plugin sources live in `runelite-client/src/main/java/net/runelite/client/plugins/microbot`.
+- The queryable API lives in `.../microbot/api`; full guide: `.../microbot/api/QUERYABLE_API.md`.
+- Quick builds: `mvn -pl runelite-client -am package`; tests: `mvn -pl runelite-client test`.
 
-## Coding Style & Naming Conventions
-- Target Java 11 (`maven-compiler-plugin` uses `<release>11</release>`); rely on Lombok for boilerplate where already adopted.
-- Keep indentation with tabs, follow the brace placement already in `MicrobotPlugin.java`, and prefer lines under 120 characters.
-- Use `UpperCamelCase` for types, `lowerCamelCase` for members, and prefix configuration interfaces with the plugin name (e.g., `ExampleConfig`).
-- Centralize shared logic in util classes rather than duplicating inside scripts; inject dependencies through RuneLite’s DI when needed.
+## Queryable API Quick Reference
+Prefer the queryable API over legacy util calls.
 
-## Testing Guidelines
-- Write JUnit 4 tests (`junit:4.12`) under matching package paths in `runelite-client/src/test/java`.
-- Name test classes with the `*Test` suffix and break scenarios into focused `@Test` methods that assert observable client state.
-- Use Mockito (`mockito-core:3.1.0`) for client services; rely on `guice-testlib` when event bus wiring is involved.
-- Run `mvn test` (or `mvn verify` before release) locally before opening a pull request and attach logs when failures require review.
+## Interaction & Timing Tips
+- Never sleep on the RuneLite client thread; use the script thread with `sleep(...)` / `sleepUntil(...)`.
+- After interactions, wait for state changes (e.g., `Rs2Bank.isOpen()`, `Rs2Player.isAnimating()`).
+- Limit search radius with `.within(...)` to reduce overhead, and cache query results when reusing in a loop.
 
-## Commit & Pull Request Guidelines
-- Follow the existing conventional commit style: `type(scope): summary` (e.g., `refactor(Rs2Walker): expand teleport keywords`).
-- Squash noisy work-in-progress commits before pushing and keep summaries under 72 characters.
-- PRs should explain the gameplay scenario, note affected plugins, link related issues or scripts, and include screenshots or clips when UI overlays change.
-- Confirm tests/builds in the PR description and mention any follow-up tasks or config changes reviewers must perform.
+## Helpful References
+- Example templates: `runelite-client/src/main/java/net/runelite/client/plugins/microbot/example/`.
+- API examples: `api/*/` directories contain `*ApiExample.java` files for NPCs, tile items, players, and objects.
+- Core utilities (legacy but still useful): `microbot/util` (e.g., `Rs2Inventory`, `Rs2Bank`, `Rs2Walker`).
 
-## Agent-Specific Instructions
-- Register new automation under `net.runelite.client.plugins.microbot` and reuse the scheduler pattern shown in `ExampleScript`.
-- Expose reusable behaviour through `microbot/util` packages so scripts stay thin and composable.
-- When adding panel controls or overlays, update the Microbot navigation panel setup in `MicrobotPlugin` and provide default config values.
-- Document new APIs in `docs/api/` and cross-link from `docs/development.md` so contributors can discover capabilities quickly.
+## QuestScript Loop (Quest Helper)
+- `QuestScript.run(config, plugin)` sets a 400–1000ms fixed-delay loop; exits early if quest helper is toggled off, not logged in, paused (`super.run()`), or no quest is selected, and waits out player animations.
+- Captures the active `QuestStep`, marks when dialogue starts, auto-chooses matching dialogue options, and clicks highlighted widgets (special shop buy for Pirate's Treasure).
+- Runs quest-specific logic via `QuestRegistry.getQuest(...).executeCustomLogic()` (Pirate's Treasure gets the plugin injected).
+- While incomplete: handles dialogue quirks (Cook's Assistant/Pirate's Treasure), exits cutscenes, clears walk targets when talking, and manages reachability flags.
+- Requirement phase: equips required items, warns on missing items (rate-limited), and attempts to acquire them by looting nearby or walking toward the defined point; prioritizes item-on-item detailed steps before other step types.
+- Dispatch order: `ConditionalStep` → `NpcStep` → `ObjectStep` → `DigStep` → `PuzzleStep`; per-type handlers choose the correct menu action, manage line-of-sight and walkable tiles, and call `sleepUntil` to wait for movement/animation/interactions before looping.

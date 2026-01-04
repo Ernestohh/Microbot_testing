@@ -1048,8 +1048,6 @@ public class GpuPlugin extends Plugin implements DrawCallbacks
 	@Override
 	public void drawZoneAlpha(Projection entityProjection, Scene scene, int level, int zx, int zz)
 	{
-		updateEntityProjection(entityProjection);
-
 		SceneContext ctx = context(scene);
 		if (ctx == null)
 		{
@@ -1065,6 +1063,9 @@ public class GpuPlugin extends Plugin implements DrawCallbacks
 			return;
 		}
 
+		updateEntityProjection(entityProjection);
+		glUniform4i(uniEntityTint, scene.getOverrideHue(), scene.getOverrideSaturation(), scene.getOverrideLuminance(), scene.getOverrideAmount());
+
 		int offset = scene.getWorldViewId() == -1 ? (SCENE_OFFSET >> 3) : 0;
 		int dx = ctx.cameraX - ((zx - offset) << 10);
 		int dz = ctx.cameraZ - ((zz - offset) << 10);
@@ -1076,7 +1077,7 @@ public class GpuPlugin extends Plugin implements DrawCallbacks
 			z.multizoneLocs(scene, zx - offset, zz - offset, ctx.cameraX, ctx.cameraZ, ctx.zones);
 		}
 
-		z.renderAlpha(zx - offset, zz - offset, cameraYaw, cameraPitch, ctx.minLevel, ctx.level, ctx.maxLevel, level, ctx.hideRoofIds, !close);
+		z.renderAlpha(zx - offset, zz - offset, cameraYaw, cameraPitch, ctx.minLevel, ctx.level, ctx.maxLevel, level, ctx.hideRoofIds, !close || (scene.getOverrideAmount() > 0));
 
 		checkGLErrors();
 	}
@@ -1239,7 +1240,8 @@ public class GpuPlugin extends Plugin implements DrawCallbacks
 				int zx = (gameObject.getX() >> 10) + offset;
 				int zz = (gameObject.getY() >> 10) + offset;
 				Zone zone = ctx.zones[zx][zz];
-				zone.addTempAlphaModel(a.vao, start, end, gameObject.getPlane(), x & 1023, y - renderable.getModelHeight() /* to render players over locs */, z & 1023);
+				int plane = Math.min(ctx.maxLevel, gameObject.getPlane());
+				zone.addTempAlphaModel(a.vao, start, end, plane, x & 1023, y - renderable.getModelHeight() /* to render players over locs */, z & 1023);
 			}
 		}
 		else
@@ -1587,7 +1589,39 @@ public class GpuPlugin extends Plugin implements DrawCallbacks
 		assert scene.getWorldViewId() == -1;
 		if (nextZones != null)
 		{
-			throw new RuntimeException("Double zone load!");
+			log.debug("Double zone load!");
+			// The previous scene load just gets dropped, this is uncommon and requires a back to back map build packet
+			// while having the first load take more than a full server cycle to complete
+			CountDownLatch latch = new CountDownLatch(1);
+			clientThread.invoke(() ->
+			{
+				for (int x = 0; x < NUM_ZONES; ++x)
+				{
+					for (int z = 0; z < NUM_ZONES; ++z)
+					{
+						Zone zone = nextZones[x][z];
+						assert !zone.cull;
+						// anything initialized is a reused zone and so shouldn't be freed
+						if (!zone.initialized)
+						{
+							zone.unmap();
+							zone.initialized = true;
+							zone.free();
+						}
+					}
+				}
+				latch.countDown();
+			});
+			try
+			{
+				latch.await();
+			}
+			catch (InterruptedException e)
+			{
+				throw new RuntimeException(e);
+			}
+			nextZones = null;
+			nextRoofChanges = null;
 		}
 
 		SceneContext ctx = root;
